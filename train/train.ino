@@ -1,26 +1,10 @@
-/* based on   http://www.arduino.cc/en/Tutorial/LiquidCrystal
-  LiquidCrystal Library - Hello World
-  Demonstrates the use a 16x2 LCD display.
-  The circuit:
-   LCD RS pin to digital pin 7
-   LCD Enable pin to digital pin 8
-   LCD D4 pin to digital pin 9
-   LCD D5 pin to digital pin 10
-   LCD D6 pin to digital pin 11
-   LCD D7 pin to digital pin 12
-   LCD R/W pin to ground
-   LCD VSS pin to ground
-   LCD VCC pin to 5V
-   10K resistor:
-   ends to +5V and ground
-   wiper to LCD VO pin (pin 3)
-
-*/
+// based on   http://www.arduino.cc/en/Tutorial/LiquidCrystal
 
 #include <LiquidCrystal.h>
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <pins_arduino.h>
 
 const char* ssid     = "BTHub4-xxxx";                     // wifi ssid
 const char* password = "<password here>";                 // wifi password
@@ -37,7 +21,7 @@ const char* arrivalsUrl = "/StopPoint/"
 const char* platform = "Southbound";
 
 // initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(2, 14, 16, 5, 4, 0);
+LiquidCrystal lcd(D4, D5, D0, D1, D2, D3);
 
 void setup() 
 {
