@@ -27,14 +27,18 @@ void setup()
 {
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Connect to Wifi");
+  lcd.setCursor(0, 1);  // set the cursor to column 0, lineNo 1 (note: lineNo 1 is the second row, since counting begins with 0):
   lcd.print(ssid);
-  //lcd.setCursor(0, 1);  // set the cursor to column 0, line 1 (note: line 1 is the second row, since counting begins with 0):
 
   //Initialize serial and wait for port to open:
   Serial.begin(9600);
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
+  
   //connect to wifi
   Serial.println();
   Serial.println();
@@ -45,6 +49,8 @@ void setup()
   // check for the presence of the shield:
   if (WiFi.status() == WL_NO_SHIELD) {
     Serial.println("WiFi shield not present");
+    lcd.setCursor(0, 1);
+    lcd.print("No Wifi shield");
     // don't continue:
     while (true);
   }
@@ -59,8 +65,12 @@ void setup()
     Serial.print(".");
   }
   printWifiStatus();
+  lcd.clear();
   lcd.setCursor(0, 0);
+  lcd.print("Connected       ");
+  lcd.setCursor(0, 1);
   lcd.print(WiFi.localIP());
+  delay(1000);
 }
 
 
@@ -81,7 +91,8 @@ void printWifiStatus() {
   Serial.println(" dBm");
 }
 
-String row1, row2;
+String last_row;
+bool first = true;
   
 void loop()
 {
@@ -91,22 +102,28 @@ void loop()
   // if there's incoming data from the net connection.
   // send it out the serial port.  This is for debugging
   // purposes only:
-  while (client.available()) {
-    char c = client.read();
-    Serial.write(c);
-  }
-
-  // close any connection before send a new request.
-  // This will free the socket on the WiFi shield
-  client.stop();
-
-  lcd.setCursor(0, 1);
+  //while (client.available()) {
+  //  char c = client.read();
+  //  Serial.write(c);
+  //}
 
   Serial.println("client.connect");
+  if(first) {
+    lcd.setCursor(0, 0);
+    lcd.print("Connect to TFL  ");
+  }
   if (!client.connect(tflServer, 443)) {
     Serial.println("connection failed");
+    lcd.setCursor(0, 0);
+    lcd.print("Connect to TFL  ");
+    lcd.setCursor(0, 1);
+    lcd.print("Failed          ");
     delay(5000);
     return;
+  }
+  if(first) {
+    lcd.setCursor(0, 1);
+    lcd.print("Connected      ");
   }
 
   client.print(F("GET "));
@@ -116,17 +133,22 @@ void loop()
   client.println(tflServer);
   client.println(F("Connection: close"));
   if (client.println() == 0) {
-    lcd.print("Fail");
+    lcd.setCursor(0, 0);
+    lcd.print("Send to TFL     ");
+    lcd.setCursor(0, 1);
+    lcd.print("Failed          ");
     Serial.println(F("Failed to send request"));
     delay(2000);
     return;
   }
-  else {
-    Serial.println("Sent GET request");
+  Serial.println("Sent GET request");
+  if(first) {
+    lcd.setCursor(0, 1);
+    lcd.print("Sent GET request");
   }
 
   // Check HTTP status
-  char status[1500] = {0};
+  char status[100] = {0};
   client.readBytesUntil('\r', status, sizeof(status));
   if (strcmp(status, "HTTP/1.1 200 OK") != 0) {
     lcd.print(status);
@@ -138,29 +160,38 @@ void loop()
   else {
     Serial.println("Response: OK");
   }
-  
+
   // Skip HTTP headers
   char endOfHeaders[] = "\r\n\r\n";
   if (!client.find(endOfHeaders)) {
-    lcd.print("Invalid");
+    lcd.setCursor(0, 1);
+    lcd.print("Invalid header  ");
     Serial.println(F("Invalid response"));
     delay(5000);
     return;
   }
 
-  //tfl seems to return a first line before 
-  Serial.println(F("First Line"));
+  //  Serial.println(F("--------------"));
+  //  while (client.available()) {
+  //    char c = client.read();
+  //    Serial.write(c);
+  //  }
+  //  Serial.println(F("--------------"));
+
+  //tfl seems to return a first lineNo before 
+  Serial.print(F("First line: "));
   Serial.println(client.readStringUntil('\n'));
+  Serial.print(F("Next char: "));
+  Serial.println(client.peek());
 
-  // Allocate JsonBuffer
+  // Allocate JsonBuffer and Parse JSON object
   // Use arduinojson.org/assistant to compute the capacity.
-  const size_t capacity = 10000;
+  const size_t capacity = 2000;
   DynamicJsonBuffer jsonBuffer(capacity);
-
-  // Parse JSON object
   JsonArray& array = jsonBuffer.parseArray(client);
   if (!array.success()) {
-    lcd.print("Parse fail");
+    lcd.setCursor(0, 1);
+    lcd.print("Parse fail      ");
     Serial.println(F("Parsing failed!"));
     delay(5000);
     return;
@@ -181,6 +212,7 @@ void loop()
   // Since the results are not sorted by time, and rather than sorting them first before displaying them
   // we loop repeatedly finding the next largest time to arrival
   int timeShown = 0;
+  int lineNo = 1;
   const int LARGEST_TIME = 99999;
   while(true) //breaks out below
   {
@@ -190,50 +222,44 @@ void loop()
     for(int i=0; i<array.size(); ++i)
     {
       JsonObject& root = array[i];
-      //if (root["platformName"].as<String>().indexOf(platform) != -1) 
+      if (root["platformName"].as<String>().indexOf(platform) != -1) 
       {
-        int timeToStation = root["timeToStation"].as<int>()/60;
+        int timeToStation = root["timeToStation"].as<int>();
 
         if(timeToStation>timeShown && timeToStation < minTimeToArrival) {
           minTimeToArrival = timeToStation;
           dest = root["towards"].as<String>();
-          mins = root["timeToStation"].as<int>()/60;
         }
       }
     }
+    if(timeShown>0 && minTimeToArrival<LARGEST_TIME)
+      delay(2000);
+    
     timeShown = minTimeToArrival;
     if(minTimeToArrival == LARGEST_TIME)
       break; //from while loop
     
-    //format display with first 13 chars of destination, then 3 right-aligned chars for minutes to arrive
-    if(dest.length()>13)
-      dest = dest.substring(0,13);
-    else while(dest.length()<13)
+    //format display with <lineNo no>.<first 11 chars of destination><3 right-aligned chars for minutes to arrive>
+    if(dest.length()>11)
+      dest = dest.substring(0,11);
+    else while(dest.length()<11)
       dest += ' ';
 
     char buf[3];
-    sprintf(buf, "%3d", mins);
-    dest += buf;
+    sprintf(buf, "%3d", timeShown/60); //seconds to minutes
 
-    row1 = row2;
-    row2 = dest;
+    String next_row = String(lineNo) + "." + dest + buf;
+    lineNo++;
     
     lcd.setCursor(0, 0);
-    lcd.print(row1);
-    Serial.print("row1:'");
-    Serial.print(row1);
-    Serial.println("'");
+    lcd.print(last_row);
+    last_row = next_row;
     lcd.setCursor(0, 1);
-    lcd.print(row2);
-    Serial.print("row2:'");
-    Serial.print(row2);
-    Serial.println("'");
-    Serial.println(" ");
-
-    delay(1000);
+    lcd.print(last_row);
   }
 
   // Disconnect
   client.stop();
+  first = false;
 }
 
