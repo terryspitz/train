@@ -25,9 +25,8 @@ const char* arrivalsUrl = "/StopPoint/"
 //https://www.arduino.cc/en/Reference/LiquidCrystalConstructor
 //LiquidCrystal(rs, enable, d4, d5, d6, d7) 
 // initialize the library with the numbers of the interface pins
-//LiquidCrystal lcd(D4, D5, D0, D1, D2, D3); //NodeMCU DevKit pins
-//LiquidCrystal lcd(D8, D7, D2, D1, RX, TX);  //WeMos D1 pins
-LiquidCrystal lcd(D7, D8, D6, D5, D4, D3); 
+LiquidCrystal lcd(D4, D3, D2, D1, RX, TX);  //WeMos D1 pins
+//LiquidCrystal lcd(D7, D8, D6, D5, D4, D3);  //NodeMCU DevKit pins
 
 void lcdPrint(String s1, String s2)
 {
@@ -52,8 +51,8 @@ void configModeCallback (WiFiManager *myWiFiManager)
 void setup() 
 {
   //Initialize serial and wait for port to open:
-  Serial.begin(9600);
-  while (!Serial) {}
+  //Serial.begin(115200);  //Serial causes WeMos D1 Mini to reset :(
+  //while (!Serial) {}
 
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
