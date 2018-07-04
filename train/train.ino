@@ -10,25 +10,37 @@
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager allow phone to configure device wifi connection
 //#include <ESP8266HTTPClient.h>  //doesn't support https easily
 #include <WiFiClientSecure.h>
+#include <BlynkSimpleEsp8266.h>
+#include <Blynk/BlynkParam.h>
+#include <EEPROM.h>
 
+// Auth Token for Blynk App.
+// see http://docs.blynk.cc/#getting-started-getting-started-with-the-blynk-app-4-auth-token
+char blynkAuth[] = "<your token here>";
 
 //see https://api.tfl.gov.uk/swagger/ui/index.html?url=/swagger/docs/v1#!/StopPoint/StopPoint_Search to find your station / stop
 const char* tflServer = "api.tfl.gov.uk";
-const char* arrivalsUrl = "/StopPoint/"
-              //"940GZZLUPNR" //pinner 
-              "940GZZLUKSX" //kings cross
-							"/Arrivals?"
-							"app_id=<id>&app_key=<key>";  //credentials from https://api-portal.tfl.gov.uk/admin 
-//const char* line = "metropolitan";
-//const char* platform = "Southbound";
+const char* tflAuth =	"app_id=3552f227&app_key=adb68a2f910ff5b3af83641537fc90c7";  //credentials from https://api-portal.tfl.gov.uk/admin 
+
+String stations[]={
+  "940GZZLUBST", "Baker Street",
+  "940GZZLUFYR", "Finchley Road",
+  "940GZZLUKSX", "King's Cross",
+  "940GZZLUPNR", "Pinner",
+  "940GZZLURYL", "Rayners Lane",
+};
+const int address = 0;
+int station = 0;
+bool stationChanged = false;
 
 //https://www.arduino.cc/en/Reference/LiquidCrystalConstructor
 //LiquidCrystal(rs, enable, d4, d5, d6, d7) 
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(D4, D3, D2, D1, RX, TX);  //WeMos D1 pins
 //LiquidCrystal lcd(D7, D8, D6, D5, D4, D3);  //NodeMCU DevKit pins
+WidgetLCD blynkLcd(V2); // Virtual LCD in app
 
-void lcdPrint(String s1, String s2)
+void lcdPrint(String s1, String s2, bool doBlynkLcd = true)
 {
   Serial.print(s1);
   Serial.print(", ");
@@ -38,6 +50,27 @@ void lcdPrint(String s1, String s2)
   lcd.print(s1);
   lcd.setCursor(0, 1);
   lcd.print(s2);
+  if(doBlynkLcd)
+  {
+    blynkLcd.clear();
+    blynkLcd.print(0,0,s1);
+    blynkLcd.print(0,1,s2);
+  }
+}
+
+// Called when station changes in Blynk app
+BLYNK_WRITE(V1)
+{
+  station = param.asInt()-1;
+  EEPROM.write(address, (byte)station);
+  EEPROM.commit(); //see http://esp8266.github.io/Arduino/versions/2.0.0/doc/libraries.html
+  stationChanged = true;
+  lcdPrint("Station changed", stations[station*2+1], false);
+  delay(1000);
+}
+
+BLYNK_APP_DISCONNECTED() {
+  lcdPrint("Blynk disconnect", "");
 }
 
 void configModeCallback (WiFiManager *myWiFiManager)
@@ -73,10 +106,35 @@ void setup()
   
   lcdPrint("WiFi Connected:", WiFi.SSID());
   delay(1000);
+
+  lcdPrint("Connect to Blynk","...");
+  Blynk.config(blynkAuth);
+  if(!Blynk.connect())
+  {
+    lcdPrint("Failed Blynk connect", "Restarting...");
+    delay(3000);
+    //reset and try again
+    ESP.reset();
+    delay(5000);
+  }   
+  lcdPrint("Connect to Blynk","OK");
+  delay(1000);
+
+  const size_t MAX_CHARS_ALL_STATIONS = 1000;
+  BlynkParamAllocated items(MAX_CHARS_ALL_STATIONS);
+  const int stationCount = sizeof(stations)/sizeof(String)/2;
+  lcdPrint("Stations", String(stationCount));
+  delay(1000);
+  for(int i=0; i<stationCount; ++i)
+    items.add(stations[2*i+1]);
+  Blynk.setProperty(V1, "labels", items);
+  EEPROM.begin(4);
+  int readStation = EEPROM.read(address);
+  if(readStation<stationCount)
+    station = readStation;
 }
 
 
-String last_row;
 bool first = true;
   
 void loop()
@@ -84,7 +142,9 @@ void loop()
   Serial.println("Start loop()");
   unsigned long queryMillis = millis();
   unsigned long displayMillis = millis();
- 
+
+  Blynk.run();
+
   WiFiClientSecure client;
   if(first) {
     lcdPrint("Connect to TFL","...");
@@ -101,6 +161,7 @@ void loop()
   }
 
   client.print(F("GET "));
+  String arrivalsUrl = "/StopPoint/" + stations[station*2] + "/Arrivals?" + tflAuth;
   client.print(arrivalsUrl);
   client.println(F(" HTTP/1.0"));
   client.print(F("Host: "));
@@ -200,9 +261,17 @@ void loop()
   int timeShown = 0;
   int lineNo = 1;
   const int LARGEST_TIME = 99999;
+  String last_row = stations[station*2+1] + "                ";
 
   while(true) //loop to display all trains, breaks out below
   {
+    Blynk.run();
+    if(stationChanged)
+    {
+      stationChanged = false;
+      break;
+    }
+
     String dest;
     int mins;
     int minTimeToArrival = LARGEST_TIME;
@@ -245,9 +314,11 @@ void loop()
     //scroll up and display
     lcd.setCursor(0, 0);
     lcd.print(last_row);
+    blynkLcd.print(0,0,last_row);
     last_row = next_row;
     lcd.setCursor(0, 1);
     lcd.print(last_row);
+    blynkLcd.print(0,1,last_row);
   }
 
   // Disconnect
