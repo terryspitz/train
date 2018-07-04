@@ -1,95 +1,81 @@
 // based on   http://www.arduino.cc/en/Tutorial/LiquidCrystal
 
 #include <LiquidCrystal.h>
-#include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <pins_arduino.h>
 
-const char* ssid     = "BTHub4-xxxx";                     // wifi ssid
-const char* password = "<password here>";                 // wifi password
-
-WiFiClientSecure client;
+#include <ESP8266WiFi.h>
+#include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
+#include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
+#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager allow phone to configure device wifi connection
+//#include <ESP8266HTTPClient.h>  //doesn't support https easily
+#include <WiFiClientSecure.h>
 
 
 //see https://api.tfl.gov.uk/swagger/ui/index.html?url=/swagger/docs/v1#!/StopPoint/StopPoint_Search to find your station / stop
 const char* tflServer = "api.tfl.gov.uk";
 const char* arrivalsUrl = "/StopPoint/"
-							"940GZZLUPNR" //pinner arrivals
+              //"940GZZLUPNR" //pinner 
+              "940GZZLUKSX" //kings cross
 							"/Arrivals?"
 							"app_id=<id>&app_key=<key>";  //credentials from https://api-portal.tfl.gov.uk/admin 
-const char* platform = "Southbound";
+//const char* line = "metropolitan";
+//const char* platform = "Southbound";
 
+//https://www.arduino.cc/en/Reference/LiquidCrystalConstructor
+//LiquidCrystal(rs, enable, d4, d5, d6, d7) 
 // initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(D4, D5, D0, D1, D2, D3);
+//LiquidCrystal lcd(D4, D5, D0, D1, D2, D3); //NodeMCU DevKit pins
+//LiquidCrystal lcd(D8, D7, D2, D1, RX, TX);  //WeMos D1 pins
+LiquidCrystal lcd(D7, D8, D6, D5, D4, D3); 
+
+void lcdPrint(String s1, String s2)
+{
+  Serial.print(s1);
+  Serial.print(", ");
+  Serial.println(s2);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(s1);
+  lcd.setCursor(0, 1);
+  lcd.print(s2);
+}
+
+void configModeCallback (WiFiManager *myWiFiManager)
+{
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  lcdPrint("Connect to Wifi", myWiFiManager->getConfigPortalSSID());
+}
 
 void setup() 
 {
-  // set up the LCD's number of columns and rows:
-  lcd.begin(16, 2);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Connect to Wifi");
-  lcd.setCursor(0, 1);  // set the cursor to column 0, lineNo 1 (note: lineNo 1 is the second row, since counting begins with 0):
-  lcd.print(ssid);
-
   //Initialize serial and wait for port to open:
   Serial.begin(9600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
+  while (!Serial) {}
+
+  // set up the LCD's number of columns and rows:
+  lcd.begin(16, 2);
   
-  //connect to wifi
-  Serial.println();
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-
-  // check for the presence of the shield:
-  if (WiFi.status() == WL_NO_SHIELD) {
-    Serial.println("WiFi shield not present");
-    lcd.setCursor(0, 1);
-    lcd.print("No Wifi shield");
-    // don't continue:
-    while (true);
-  }
-
-  // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-  Serial.print("Attempting to connect to SSID: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  printWifiStatus();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Connected       ");
-  lcd.setCursor(0, 1);
-  lcd.print(WiFi.localIP());
+  WiFiManager wifiManager;
+  wifiManager.setAPCallback(configModeCallback);
+  wifiManager.setTimeout(180);  //in seconds
+  //wifiManager.resetSettings(); //for testing
+  
+  //fetches configured ssid and password and tries to connect
+  if(!wifiManager.autoConnect("BedsideDepartureBoard")) {
+    lcdPrint("Failed WiFi connect", "Restarting...");
+    delay(3000);
+    //reset and try again
+    ESP.reset();
+    delay(5000);
+  }   
+  
+  lcdPrint("WiFi Connected:", WiFi.SSID());
   delay(1000);
 }
 
-
-void printWifiStatus() {
-  // print the SSID of the network you're attached to:
-  Serial.print("SSID: ");
-  Serial.println(WiFi.SSID());
-
-  // print your WiFi shield's IP address:
-  IPAddress ip = WiFi.localIP();
-  Serial.print("IP Address: ");
-  Serial.println(ip);
-
-  // print the received signal strength:
-  long rssi = WiFi.RSSI();
-  Serial.print("signal strength (RSSI):");
-  Serial.print(rssi);
-  Serial.println(" dBm");
-}
 
 String last_row;
 bool first = true;
@@ -97,160 +83,167 @@ bool first = true;
 void loop()
 {
   Serial.println("Start loop()");
-  
-  //from https://www.arduino.cc/en/Tutorial/WiFiWebClientRepeating
-  // if there's incoming data from the net connection.
-  // send it out the serial port.  This is for debugging
-  // purposes only:
-  //while (client.available()) {
-  //  char c = client.read();
-  //  Serial.write(c);
-  //}
-
-  Serial.println("client.connect");
+  unsigned long queryMillis = millis();
+  unsigned long displayMillis = millis();
+ 
+  WiFiClientSecure client;
   if(first) {
-    lcd.setCursor(0, 0);
-    lcd.print("Connect to TFL  ");
+    lcdPrint("Connect to TFL","...");
+    delay(1000);
   }
   if (!client.connect(tflServer, 443)) {
-    Serial.println("connection failed");
-    lcd.setCursor(0, 0);
-    lcd.print("Connect to TFL  ");
-    lcd.setCursor(0, 1);
-    lcd.print("Failed          ");
+    lcdPrint("Connect to TFL","Failed");
     delay(5000);
     return;
   }
-  if(first) {
-    lcd.setCursor(0, 1);
-    lcd.print("Connected      ");
+  else if(first) {
+    lcdPrint("Connect to TFL","OK");
+    delay(1000);
   }
 
   client.print(F("GET "));
   client.print(arrivalsUrl);
-  client.println(F(" HTTP/1.1"));
+  client.println(F(" HTTP/1.0"));
   client.print(F("Host: "));
   client.println(tflServer);
   client.println(F("Connection: close"));
   if (client.println() == 0) {
-    lcd.setCursor(0, 0);
-    lcd.print("Send to TFL     ");
-    lcd.setCursor(0, 1);
-    lcd.print("Failed          ");
-    Serial.println(F("Failed to send request"));
-    delay(2000);
+    lcdPrint("Request from TFL","Failed");
+    delay(5000);
     return;
   }
-  Serial.println("Sent GET request");
-  if(first) {
-    lcd.setCursor(0, 1);
-    lcd.print("Sent GET request");
+  else if(first) {
+    lcdPrint("Request from TFL","OK");
+    delay(1000);
   }
 
   // Check HTTP status
   char status[100] = {0};
   client.readBytesUntil('\r', status, sizeof(status));
   if (strcmp(status, "HTTP/1.1 200 OK") != 0) {
-    lcd.print(status);
-    Serial.print(F("Unexpected response: "));
-    Serial.println(status);
+    lcdPrint("Get from TFL","Failed:" + String(status));
     delay(5000);
     return;
   }
-  else {
-    Serial.println("Response: OK");
+  else if(first) {
+    lcdPrint("Get from TFL","OK");
+    delay(1000);
   }
 
   // Skip HTTP headers
   char endOfHeaders[] = "\r\n\r\n";
   if (!client.find(endOfHeaders)) {
-    lcd.setCursor(0, 1);
-    lcd.print("Invalid header  ");
-    Serial.println(F("Invalid response"));
+    lcdPrint("Get from TFL","Invalid header");
     delay(5000);
     return;
   }
 
-  //  Serial.println(F("--------------"));
-  //  while (client.available()) {
-  //    char c = client.read();
-  //    Serial.write(c);
-  //  }
-  //  Serial.println(F("--------------"));
-
-  //tfl seems to return a first lineNo before 
-  Serial.print(F("First line: "));
-  Serial.println(client.readStringUntil('\n'));
-  Serial.print(F("Next char: "));
-  Serial.println(client.peek());
-
-  // Allocate JsonBuffer and Parse JSON object
-  // Use arduinojson.org/assistant to compute the capacity.
-  const size_t capacity = 2000;
-  DynamicJsonBuffer jsonBuffer(capacity);
-  JsonArray& array = jsonBuffer.parseArray(client);
-  if (!array.success()) {
-    lcd.setCursor(0, 1);
-    lcd.print("Parse fail      ");
-    Serial.println(F("Parsing failed!"));
-    delay(5000);
-    return;
+  if(false) { //check data
+    Serial.println(F("--------------"));
+    while (client.available()) {
+      char c = client.read();
+      Serial.write(c);
+    }
+    Serial.println(F("--------------"));
   }
-  Serial.print(F("Parsed JSON, trains: "));
-  Serial.println(array.size());
-  for(int i=0; i<array.size(); ++i)
+  
+  // Extract all train details.
+  const int MAX_TRAINS=50;
+  int timeToStation[MAX_TRAINS];
+  String destination[MAX_TRAINS];
+  int trains=0;
+  
+  while(true)
   {
-    JsonObject& root = array[i];
+    //find next object (skip array start/comma)
+    while(client.peek()!='{' && client.peek()!=-1)
+      client.read();
+    if(client.peek()==-1)
+      break; //done reading json
+    
+    // Allocate JsonBuffer and Parse JSON object
+    // Use arduinojson.org/assistant to compute the capacity, then add a bit
+    const size_t capacity = 10000;
+    DynamicJsonBuffer jsonBuffer(capacity);  //allocate on heap
+    JsonObject& root = jsonBuffer.parseObject(client);
+    if (!root.success()) {
+      lcdPrint("Parse TFL data", "Failed");
+      Serial.write(client.read());
+      delay(5000);
+      return;
+    }
+    
+    //dump response to Serial
+    Serial.print(F("Train: "));
     Serial.print(root["platformName"].as<String>());
     Serial.print(" - ");
     Serial.print(root["towards"].as<String>());
     Serial.print(" in ");
     Serial.println(root["timeToStation"].as<int>()/60);
+
+    //if (root["platformName"].as<String>().indexOf(platform) != -1) 
+    {
+      timeToStation[trains] = root["timeToStation"].as<int>();
+      destination[trains] = root["towards"].as<String>();
+      ++trains;
+      if(trains==MAX_TRAINS)
+        break;
+    }
+  }
+
+  if(first) {
+    lcdPrint("Parse TFL data","OK");
+    delay(1000);
   }
   
-  // Extract and display train details.
-  // Since the results are not sorted by time, and rather than sorting them first before displaying them
-  // we loop repeatedly finding the next largest time to arrival
+  // TFL results are not sorted by time.  To avoid sorting in memory
+  // we loop repeatedly finding the next largest time to arrival.
   int timeShown = 0;
   int lineNo = 1;
   const int LARGEST_TIME = 99999;
-  while(true) //breaks out below
+
+  while(true) //loop to display all trains, breaks out below
   {
     String dest;
     int mins;
     int minTimeToArrival = LARGEST_TIME;
-    for(int i=0; i<array.size(); ++i)
+    //find the next largest timeToArrival bigger than the current timeShown
+    for(int i=0; i<trains; ++i)
     {
-      JsonObject& root = array[i];
-      if (root["platformName"].as<String>().indexOf(platform) != -1) 
-      {
-        int timeToStation = root["timeToStation"].as<int>();
-
-        if(timeToStation>timeShown && timeToStation < minTimeToArrival) {
-          minTimeToArrival = timeToStation;
-          dest = root["towards"].as<String>();
-        }
+      if(timeToStation[i]>timeShown && timeToStation[i] < minTimeToArrival) {
+        minTimeToArrival = timeToStation[i];
+        dest = destination[i];
       }
     }
-    if(timeShown>0 && minTimeToArrival<LARGEST_TIME)
-      delay(2000);
-    
     timeShown = minTimeToArrival;
-    if(minTimeToArrival == LARGEST_TIME)
-      break; //from while loop
+    if(minTimeToArrival == LARGEST_TIME) {
+      //finished displaying, if 30s since last query do it again 
+      if(millis() > queryMillis+30000)
+        break; //from while loop
+      //else start display loop again
+      int timeShown = 0;
+      int lineNo = 1;
+      continue;
+    }
     
-    //format display with <lineNo no>.<first 11 chars of destination><3 right-aligned chars for minutes to arrive>
-    if(dest.length()>11)
-      dest = dest.substring(0,11);
-    else while(dest.length()<11)
-      dest += ' ';
+    //format display with <lineNo no>.<destination[0:11]> <minutes to arrive>
+    String prefix = String(lineNo) + ".";
+    String suffix = " " + String(int(timeShown/60));  //seconds to minutes
+    int destLength = 16 - prefix.length() - suffix.length();
+    if(dest.length()>destLength)
+      dest = dest.substring(0,destLength);
+    else if(dest.length()<destLength)
+      dest += String("                ").substring(0,destLength-dest.length());
 
-    char buf[3];
-    sprintf(buf, "%3d", timeShown/60); //seconds to minutes
-
-    String next_row = String(lineNo) + "." + dest + buf;
+    String next_row = prefix + dest + suffix;
     lineNo++;
-    
+
+    //pause after all work done
+    while(millis() < displayMillis+2000)
+      delay(100);
+    displayMillis = millis();
+
+    //scroll up and display
     lcd.setCursor(0, 0);
     lcd.print(last_row);
     last_row = next_row;
