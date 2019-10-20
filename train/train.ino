@@ -1,18 +1,18 @@
 // based on   http://www.arduino.cc/en/Tutorial/LiquidCrystal
 
-#include <LiquidCrystal.h>
+#include <LiquidCrystal_PCF8574.h>
 #include <ArduinoJson.h>
 #include <pins_arduino.h>
+#include <EEPROM.h>
 
 #include <ESP8266WiFi.h>
 #include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager allow phone to configure device wifi connection
-//#include <ESP8266HTTPClient.h>  //doesn't support https easily
+//#include <ESP8266HTTPClient.h>  //doesn't support https easily, so use WiFiClientSecure instead
 #include <WiFiClientSecure.h>
 #include <BlynkSimpleEsp8266.h>
 #include <Blynk/BlynkParam.h>
-#include <EEPROM.h>
 
 // Auth Token for Blynk App.
 // see http://docs.blynk.cc/#getting-started-getting-started-with-the-blynk-app-4-auth-token
@@ -36,7 +36,9 @@ bool stationChanged = false;
 //https://www.arduino.cc/en/Reference/LiquidCrystalConstructor
 //LiquidCrystal(rs, enable, d4, d5, d6, d7) 
 // initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(D4, D3, D2, D1, RX, TX);  //WeMos D1 pins
+//LiquidCrystal lcd(D4, D3, D2, D1, RX, TX);  //WeMos D1 pins
+//LiquidCrystal lcd(TX, RX, D1, D2, D3, D4);  //WeMos D1 pins
+LiquidCrystal_PCF8574 lcd(0x27); // PCF8574 8-bit I/O Expander for I2C bus for 16x2 LCD display; set the LCD address to 0x27 for a 16 chars and 2 line display
 //LiquidCrystal lcd(D7, D8, D6, D5, D4, D3);  //NodeMCU DevKit pins
 WidgetLCD blynkLcd(V2); // Virtual LCD in app
 
@@ -84,9 +86,11 @@ void configModeCallback (WiFiManager *myWiFiManager)
 void setup() 
 {
   //Initialize serial and wait for port to open:
-  //Serial.begin(115200);  //Serial causes WeMos D1 Mini to reset :(
-  //while (!Serial) {}
+  Serial.begin(115200);  //Serial causes WeMos D1 Mini to reset :(
+  while (!Serial) {}
 
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW); //turn it on, so can see if the board is powered
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
   
@@ -146,12 +150,18 @@ void loop()
   Blynk.run();
 
   WiFiClientSecure client;
+  client.setInsecure();
   if(first) {
     lcdPrint("Connect to TFL","...");
+    Serial.println(tflServer);
     delay(1000);
   }
   if (!client.connect(tflServer, 443)) {
     lcdPrint("Connect to TFL","Failed");
+    const size_t error_size = 255;
+    char error_buf[error_size];
+    Serial.println(client.getLastSSLError(error_buf, error_size));
+    Serial.println(error_buf);
     delay(5000);
     return;
   }
@@ -163,6 +173,7 @@ void loop()
   client.print(F("GET "));
   String arrivalsUrl = "/StopPoint/" + stations[station*2] + "/Arrivals?" + tflAuth;
   client.print(arrivalsUrl);
+  Serial.println(arrivalsUrl);
   client.println(F(" HTTP/1.0"));
   client.print(F("Host: "));
   client.println(tflServer);
@@ -224,11 +235,13 @@ void loop()
     // Allocate JsonBuffer and Parse JSON object
     // Use arduinojson.org/assistant to compute the capacity, then add a bit
     const size_t capacity = 10000;
-    DynamicJsonBuffer jsonBuffer(capacity);  //allocate on heap
-    JsonObject& root = jsonBuffer.parseObject(client);
-    if (!root.success()) {
+    DynamicJsonDocument root(capacity);  //allocate on heap
+    DeserializationError error = deserializeJson(root, client);
+    //JsonObject root = doc.as<JsonObject>();
+    if (error) {
       lcdPrint("Parse TFL data", "Failed");
       Serial.write(client.read());
+      Serial.write(error.c_str());
       delay(5000);
       return;
     }
